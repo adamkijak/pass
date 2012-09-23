@@ -1,0 +1,116 @@
+#!/bin/bash
+
+timeout=10
+safe_path=~/.pass.gpg
+cipher='AES256'
+gpg="gpg --cipher-alg $cipher"
+grep="grep --color=never"
+
+red="\033[31m";
+green="\033[32m";
+reset="\033[0m";
+
+usage()
+{
+    echo "usage: pass [PATTERN] [edit|-e] [help|-h]" >&2
+    exit 1
+}
+
+error()
+{ 
+    echo -e "$red$@$reset" >&2 
+}
+
+get()
+{
+    if [ -z "$1" ]; then 
+        error "PATTERN missing"
+        usage
+    fi
+
+    local match=`$gpg -o - "$safe_path" | $grep -Ev "(^\#|^$)" | awk \
+    "{ 
+        if(\\$1 ~ \"$1\")
+        {
+            print \\$0
+        }  
+    }"`
+
+    if [ -n "$2" ]; then 
+        match=`echo "$match" | awk \
+        "{
+            if(\\$2 ~ \"$2\")
+            {
+                print \\$0
+            }  
+        }"`
+    fi
+    
+
+    if [ -z "$match" ]; then 
+        error 'no match'
+        exit 1; 
+    fi
+
+    if [ `echo "$match" | wc -l` -gt 1 ]; then
+        error "more than one line match"
+        exit 1
+    fi
+
+    for selection in primary secondary clipboard;
+    do
+        echo "$match" | awk '{print $3}' | xclip -selection $selection
+    done
+
+    echo "$match" | awk "{print \"${green}password for \"\$2\"@\"\$1\" will disapear in $timeout seconds${reset}\"}"
+    
+    for selection in primary secondary clipboard;
+    do
+        `sleep $timeout ; echo | xclip -selection $selection`&
+    done
+}
+
+edit()
+{
+        tmp_file="`TMPDIR=/dev/shm mktemp -t .tmp.XXXXXX`"
+
+        if ! $gpg -o "$tmp_file" --yes "$safe_path";  then
+            rm -f "$tmp_file"
+            exit 1
+        fi
+
+        trap "rm -f "$tmp_file"" EXIT
+
+		vim -n "$tmp_file"
+		$gpg -c -o "$safe_path" --yes "$tmp_file"
+		rm -f "$tmp_file"
+}
+
+if [ ! -e "$safe_path" ];
+then
+    error "safe file does not exists, creating new one..."
+    echo | $gpg -c -o "$safe_path"
+    exit
+fi
+
+if [ $# -eq 0 ]; then usage; fi
+
+case $1 in
+    edit|-e)
+        edit
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    -*)
+        error 'invalid option'
+        usage
+        ;;
+    *)
+        if [ $# -gt 2 ]; then
+            error 'too many arguments'
+            usage
+        fi
+        get "$1" "$2"
+        ;;
+esac
